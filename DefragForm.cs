@@ -226,6 +226,7 @@ internal sealed class DefragForm : Form
     private async void LoadMap(string letter)
     {
         _map.ShowMessage("Reading the volume bitmap\u2026");
+        using IDisposable busy = Busy.Enter(this);
 
         (ClusterMapData? data, string message) = await Task.Run(() => VolumeService.ReadBitmap(letter));
 
