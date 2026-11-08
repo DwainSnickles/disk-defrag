@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish (for example v1.0.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish Windows x64 release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Disk Defrag at the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish Disk Defrag
+        run: >
+          dotnet publish "DiskDefrag.csproj" -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None -p:DebugSymbols=false
+          -o staging/diskdefrag
+
+      - name: Build the zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Compress-Archive -Path staging/diskdefrag/* -DestinationPath artifacts/Disk-Defrag-win-x64.zip -Force
+          Get-ChildItem artifacts | Select-Object Name, Length
+
+      - name: Publish the GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.ref_name }}" }
+          Write-Host "Releasing $tag"
+          gh release create $tag artifacts/*.zip --title $tag --generate-notes --verify-tag
