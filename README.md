@@ -9,6 +9,8 @@ It is built for people replacing **AML Free Disk Defrag**, Defraggler,
 Auslogics Disk Defrag or IObit Smart Defrag — same workflow (select volume, Analyse,
 Defragment, Optimise, watch the map), without adverts or a bundled "cleaner".
 
+![Disk Defrag: volume table with free space, Analyse/Defragment/Optimize toolbar and the cluster map](docs/disk-defrag.png)
+
 ## Features
 
 - **Volume table** — every fixed and removable volume with file system, label, total/free
