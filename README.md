@@ -1,6 +1,6 @@
 # Disk Defrag — cluster-map defragmentation for Windows
 
-[![Download the portable build](https://img.shields.io/badge/download-portable%20zip-2ea043?logo=windows&logoColor=white)](https://github.com/DwainSnickles/disk-defrag/releases/latest)
+[![Build status](https://github.com/DwainSnickles/disk-defrag/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/DwainSnickles/disk-defrag/actions/workflows/build.yml) [![Download the portable build](https://img.shields.io/badge/download-portable%20zip-2ea043?logo=windows&logoColor=white)](https://github.com/DwainSnickles/disk-defrag/releases/latest)
 
 **Disk Defrag** is a free, portable disk defragmentation front-end for Windows 10/11 with a
 live cluster map, streamed `defrag.exe` output and a volume table that shows what the old
