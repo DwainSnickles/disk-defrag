@@ -21,6 +21,8 @@ internal sealed class DefragForm : Form
     private string? _selected;
     private DefragJob? _job;
     private bool _busy;
+    private bool _mapBusy;
+    private readonly System.Windows.Forms.Timer _liveTimer = new() { Interval = 800 };
 
     public DefragForm()
     {
@@ -57,6 +59,7 @@ internal sealed class DefragForm : Form
         _exit.Click += (_, _) => Close();
         _elevate.Click += (_, _) => RelaunchElevated();
         _grid.SelectionChanged += OnVolumeSelected;
+        _liveTimer.Tick += async (_, _) => await RefreshLiveMapAsync();
 
         _tips.SetToolTip(_analyze, "Runs defrag /A: reports fragmentation without touching the volume.");
         _tips.SetToolTip(_defragment, "Runs defrag /D: consolidates fragmented files. Needs an elevated session.");
@@ -225,10 +228,10 @@ internal sealed class DefragForm : Form
                 ? $"Selected {letter}:"
                 : $"Selected {letter}:  \u2022  {volume.FileSystem}  \u2022  {volume.UsedPercent:0}% used  \u2022  {DefragTheme.Bytes(volume.Free)} free");
 
-        LoadMap(letter);
+        _ = LoadMapAsync(letter);
     }
 
-    private async void LoadMap(string letter)
+    private async Task LoadMapAsync(string letter)
     {
         _map.ShowMessage("Reading the volume bitmap\u2026");
         using IDisposable busy = Busy.Enter(this);
@@ -248,6 +251,32 @@ internal sealed class DefragForm : Form
         _tips.SetToolTip(_map, data.Note);
     }
 
+    private async Task RefreshLiveMapAsync()
+    {
+        if (_job is null || _selected is null || _mapBusy) return;
+
+        string letter = _selected;
+        _mapBusy = true;
+
+        try
+        {
+            (ClusterMapData? data, _) = await Task.Run(() => VolumeService.ReadBitmap(letter));
+
+            if (IsDisposed || data is null) return;
+
+            _map.SetData(data);
+            _tips.SetToolTip(_map, data.Note);
+        }
+        catch
+        {
+            // A failed poll keeps the last good frame; the next tick tries again.
+        }
+        finally
+        {
+            _mapBusy = false;
+        }
+    }
+
     private async Task RunAsync(DefragMode mode)
     {
         if (_busy) return;
@@ -259,6 +288,10 @@ internal sealed class DefragForm : Form
         }
 
         string letter = _selected;
+
+        // Load the pre-job bitmap so the live map can highlight what changes.
+        await LoadMapAsync(letter);
+
         DefragJob job;
 
         try
@@ -274,6 +307,7 @@ internal sealed class DefragForm : Form
         _job = job;
         _progress.Begin($"{DefragJob.VerbFor(mode).ToUpperInvariant()} {letter}:");
         SetBusy(true, $"{DefragJob.VerbFor(mode)} {letter}: \u2014 defrag.exe is running.");
+        _liveTimer.Start();
 
         Append(string.Empty);
         Append($"> defrag {DefragJob.ArgumentsFor(letter, mode)}");
@@ -309,6 +343,7 @@ internal sealed class DefragForm : Form
 
             BeginInvoke(() =>
             {
+                _liveTimer.Stop();
                 _job = null;
                 _busy = false;
                 _progress.Stop();
@@ -333,7 +368,7 @@ internal sealed class DefragForm : Form
                 }
 
                 LoadVolumes();
-                LoadMap(letter);
+                _ = LoadMapAsync(letter);
             });
         };
 
@@ -393,6 +428,8 @@ internal sealed class DefragForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        _liveTimer.Stop();
+        _liveTimer.Dispose();
         _job?.Stop();
         _job?.Dispose();
         base.OnFormClosing(e);

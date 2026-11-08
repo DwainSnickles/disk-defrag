@@ -13,12 +13,13 @@ internal sealed record VolumeInfo(string Letter, string Label, string FileSystem
 /// <summary>A downsamplable copy of the volume allocation bitmap, one bit per cluster.</summary>
 internal sealed class ClusterMapData
 {
-    public ClusterMapData(byte[] bits, long clusters, int bytesPerCluster, string note)
+    public ClusterMapData(byte[] bits, long clusters, int bytesPerCluster, string note, string letter)
     {
         Bits = bits;
         Clusters = clusters;
         BytesPerCluster = bytesPerCluster;
         Note = note;
+        Letter = letter;
     }
 
     public byte[] Bits { get; }
@@ -28,6 +29,8 @@ internal sealed class ClusterMapData
     public int BytesPerCluster { get; }
 
     public string Note { get; }
+
+    public string Letter { get; }
 }
 
 internal static class VolumeService
@@ -166,7 +169,7 @@ internal static class VolumeService
             var bits = new byte[length];
             Marshal.Copy(new IntPtr(output.ToInt64() + 16), bits, 0, length);
 
-            return (new ClusterMapData(bits, clusters, bytesPerCluster, layoutNote), string.Empty);
+            return (new ClusterMapData(bits, clusters, bytesPerCluster, layoutNote, letter), string.Empty);
         }
         catch (Exception ex)
         {

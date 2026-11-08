@@ -25,7 +25,9 @@ Defragment, Optimise, watch the map), without adverts or a bundled "cleaner".
   sweeps while `defrag.exe` reports no number, so a run is never a silent black box.
 - **Live cluster map** — read from the NTFS allocation bitmap
   (`FSCTL_GET_VOLUME_BITMAP`) and the volume geometry (`FSCTL_GET_NTFS_VOLUME_DATA`),
-  sampled into ~16,000 cells with a free / partly-used / fully-used legend.
+  sampled into ~16,000 cells with a free / partly-used / fully-used legend. While a
+  job runs the map keeps refreshing and highlights the cells that change: cyan for
+  newly allocated clusters, violet for freed ones.
 - **Honest failure states** — `defrag.exe` reports privilege problems as text while still
   exiting 0, so the tool reads the output and says "refused — needs an elevated session"
   instead of claiming success. The cluster map explains itself when the volume cannot be
@@ -45,9 +47,10 @@ Defragment, Optimise, watch the map), without adverts or a bundled "cleaner".
 dotnet build "DiskDefrag.csproj"
 ```
 
-The project builds into `../bin/$(Configuration)/net10.0-windows/` so that the executable
-lands next to `PC Medic.exe` when the two are used as a suite. Run it on its own by copying
-`DiskDefrag.exe` plus its `.dll` and `.runtimeconfig.json` anywhere you like.
+The project builds into `bin/$(Configuration)/net10.0-windows/` under the repo root.
+Run it on its own by copying `DiskDefrag.exe` plus its `.dll` and `.runtimeconfig.json`
+anywhere you like — or use the self-contained single-file publish from the release
+workflow if you want one exe with no .NET dependency.
 
 ## SEO / search terms
 

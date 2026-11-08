@@ -444,6 +444,8 @@ internal sealed class ClusterMapView : Control
     private ClusterMapData? _data;
     private string _message = "Select a volume to render its cluster map.";
     private double[]? _sample;
+    private double[]? _previousSample;
+    private sbyte[]? _delta;
     private int _columns;
     private int _rows;
 
@@ -466,12 +468,20 @@ internal sealed class ClusterMapView : Control
     {
         _data = null;
         _sample = null;
+        _previousSample = null;
+        _delta = null;
         _message = message;
         Invalidate();
     }
 
     public void SetData(ClusterMapData data)
     {
+        if (_data is null || _data.Letter != data.Letter)
+        {
+            _previousSample = null;
+            _delta = null;
+        }
+
         _data = data;
         _sample = null;
         Invalidate();
@@ -495,6 +505,7 @@ internal sealed class ClusterMapView : Control
         int columns = Math.Max(16, area.Width / 6);
         int rows = Math.Max(8, area.Height / 6);
         EnsureSample(columns, rows);
+        UpdateDelta();
 
         float size = Math.Min(area.Width / (float)columns, area.Height / (float)rows);
         float gap = size > 3.2f ? 1f : 0f;
@@ -506,8 +517,18 @@ internal sealed class ClusterMapView : Control
         {
             for (int column = 0; column < columns; column++)
             {
-                double used = _sample![(row * columns) + column];
-                Color tone = used <= 0.001 ? free : used >= 0.99 ? DefragTheme.Good : partial;
+                int index = (row * columns) + column;
+                double used = _sample![index];
+                Color tone;
+
+                if (_delta is not null && _delta[index] != 0)
+                {
+                    tone = _delta[index] > 0 ? DefragTheme.Accent : DefragTheme.Violet;
+                }
+                else
+                {
+                    tone = used <= 0.001 ? free : used >= 0.99 ? DefragTheme.Good : partial;
+                }
 
                 using var brush = new SolidBrush(tone);
                 g.FillRectangle(
@@ -549,6 +570,33 @@ internal sealed class ClusterMapView : Control
         _sample = sample;
     }
 
+    private void UpdateDelta()
+    {
+        if (_sample is null)
+        {
+            _delta = null;
+            return;
+        }
+
+        if (_previousSample is null || _previousSample.Length != _sample.Length)
+        {
+            _delta = new sbyte[_sample.Length];
+            _previousSample = (double[])_sample.Clone();
+            return;
+        }
+
+        var delta = new sbyte[_sample.Length];
+
+        for (int index = 0; index < _sample.Length; index++)
+        {
+            double difference = _sample[index] - _previousSample[index];
+            delta[index] = difference > 0.04 ? (sbyte)1 : difference < -0.04 ? (sbyte)-1 : (sbyte)0;
+        }
+
+        _delta = delta;
+        _previousSample = (double[])_sample.Clone();
+    }
+
     private long CountAllocated(long startCluster, long endCluster)
     {
         byte[] bits = _data!.Bits;
@@ -572,7 +620,9 @@ internal sealed class ClusterMapView : Control
 
         x = DrawKey(g, x, y, DefragTheme.Good, "USED");
         x = DrawKey(g, x, y, DefragTheme.Alpha(DefragTheme.Good, 110), "PARTLY USED");
-        DrawKey(g, x, y, Color.FromArgb(22, 30, 40), "FREE");
+        x = DrawKey(g, x, y, Color.FromArgb(22, 30, 40), "FREE");
+        x = DrawKey(g, x, y, DefragTheme.Accent, "NEW DATA");
+        DrawKey(g, x, y, DefragTheme.Violet, "FREED");
 
         TextRenderer.DrawText(
             g,
