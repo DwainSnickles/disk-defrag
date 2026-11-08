@@ -53,10 +53,15 @@ lands next to `PC Medic.exe` when the two are used as a suite. Run it on its own
 
 `disk-defrag` `defragmentation` `cluster-map` `ntfs` `windows` `windows-11` `portable`
 `winforms` `dotnet` `storage-optimizer` `aml-disk-defrag-alternative`
-`defraggler-alternative` `advanced-systemcare-alternative`
+`defraggler-alternative` `advanced-systemcare-alternative` `freebuff`
 
 ## Part of the PC Medic suite
 
 PC Medic is the wider portable maintenance suite (cleanup, startup audit, registry audit,
 shortcut audit, power tuning). Its Maintenance page launches this tool when the executables
 sit side by side: **[github.com/DwainSnickles/pc-medic](https://github.com/DwainSnickles/pc-medic)**.
+
+---
+
+Built with **[Freebuff](https://freebuff.com)** — the AI coding agent that builds and
+maintains this suite.
