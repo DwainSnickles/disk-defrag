@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace DiskDefrag;
 
@@ -121,5 +122,36 @@ internal sealed class DefragJob : IDisposable
         {
             return Encoding.UTF8;
         }
+    }
+}
+
+/// <summary>
+/// Reads the percentage out of defrag.exe's streamed output. A progress line is a short label, the
+/// number and a percent sign, optionally followed by one word or a run of dots ("Analysis: 41%
+/// complete", "Defragmentation: 17 % done", "  20% ....."). Report rows put "=" between label and
+/// value and are rejected by the shape test, so "Percent file fragmentation = 49 %" cannot move the bar.
+/// </summary>
+internal static class DefragOutput
+{
+    private static readonly Regex ProgressLine = new(
+        @"^\s*(?<label>[\p{L}][\p{L}\s:.\-]{0,23}?)?\s*(?<percent>\d{1,3})\s*%(?<tail>[\p{L}\s.]*)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>True when the line carries a percentage; the label may be empty.</summary>
+    public static bool TryReadProgress(string line, out string label, out int percent)
+    {
+        label = string.Empty;
+        percent = 0;
+
+        if (string.IsNullOrWhiteSpace(line)) return false;
+
+        Match match = ProgressLine.Match(line);
+        if (!match.Success) return false;
+        if (!int.TryParse(match.Groups["percent"].Value, out int value) || value is < 0 or > 100) return false;
+
+        label = match.Groups["label"].Value.Trim().TrimEnd(':', '-', '.').Trim();
+        percent = value;
+
+        return true;
     }
 }

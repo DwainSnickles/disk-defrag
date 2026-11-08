@@ -20,6 +20,9 @@ Defragment, Optimise, watch the map), without adverts or a bundled "cleaner".
 - **Analyse / Defragment / Optimize** — drives the Windows storage optimiser directly
   (`defrag /A`, `/D`, `/O`) and streams its output into the activity log line by line.
 - **Stop** — terminates the running `defrag.exe` process tree.
+- **Operation progress** — a progress strip under the cluster map reports the engine's own
+  percentage (`Analysis: 41% complete`, `Defragmentation: 17% complete`) on a filling bar, and
+  sweeps while `defrag.exe` reports no number, so a run is never a silent black box.
 - **Live cluster map** — read from the NTFS allocation bitmap
   (`FSCTL_GET_VOLUME_BITMAP`) and the volume geometry (`FSCTL_GET_NTFS_VOLUME_DATA`),
   sampled into ~16,000 cells with a free / partly-used / fully-used legend.

@@ -9,6 +9,7 @@ internal sealed class DefragForm : Form
     private readonly ToolTip _tips = new();
     private readonly VolumeGrid _grid = new();
     private readonly ClusterMapView _map = new();
+    private readonly ProgressStrip _progress = new() { Dock = DockStyle.Bottom, Height = 42 };
     private readonly TextBox _log = new();
     private readonly DarkButton _elevate = new() { Text = "RUN AS ADMIN", Size = new Size(140, 28) };
     private readonly DarkButton _analyze = new() { Text = "ANALYZE", Primary = true, Size = new Size(120, 32) };
@@ -160,6 +161,10 @@ internal sealed class DefragForm : Form
 
         _map.Dock = DockStyle.Fill;
         card.Controls.Add(_map);
+
+        // Docked after the map, so the strip takes the card's last rows only while a job is running.
+        card.Controls.Add(_progress);
+
         return card;
     }
 
@@ -267,6 +272,7 @@ internal sealed class DefragForm : Form
         }
 
         _job = job;
+        _progress.Begin($"{DefragJob.VerbFor(mode).ToUpperInvariant()} {letter}:");
         SetBusy(true, $"{DefragJob.VerbFor(mode)} {letter}: \u2014 defrag.exe is running.");
 
         Append(string.Empty);
@@ -283,7 +289,18 @@ internal sealed class DefragForm : Form
                 refused = true;
             }
 
-            if (!IsDisposed) BeginInvoke(() => Append(line));
+            if (!IsDisposed)
+            {
+                BeginInvoke(() =>
+                {
+                    Append(line);
+
+                    if (DefragOutput.TryReadProgress(line, out string label, out int percent))
+                    {
+                        _progress.Report(label, percent);
+                    }
+                });
+            }
         };
 
         job.Exited += code =>
@@ -294,6 +311,7 @@ internal sealed class DefragForm : Form
             {
                 _job = null;
                 _busy = false;
+                _progress.Stop();
                 SetBusy(false, string.Empty);
 
                 if (refused)
@@ -332,6 +350,7 @@ internal sealed class DefragForm : Form
 
         _job.Stop();
         Append("Stopped by the operator.");
+        if (_selected is not null) _progress.Relabel($"STOPPING {_selected}:");
         SetStatus("Stopping defrag.exe\u2026", DefragTheme.Warn);
     }
 
