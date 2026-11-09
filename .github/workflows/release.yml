@@ -40,6 +40,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Compress-Archive -Path staging/diskdefrag/* -DestinationPath artifacts/Disk-Defrag-win-x64.zip -Force
+          $hash = (Get-FileHash artifacts/Disk-Defrag-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/artifacts/Disk-Defrag-win-x64.zip.sha256", "$hash  Disk-Defrag-win-x64.zip`n")
           Get-ChildItem artifacts | Select-Object Name, Length
 
       - name: Publish the GitHub release
@@ -50,4 +52,4 @@ jobs:
           $tag = "${{ inputs.tag }}"
           if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.ref_name }}" }
           Write-Host "Releasing $tag"
-          gh release create $tag artifacts/*.zip --title $tag --generate-notes --verify-tag
+          gh release create $tag artifacts/* --title $tag --generate-notes --verify-tag
