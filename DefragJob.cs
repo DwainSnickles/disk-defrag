@@ -154,4 +154,81 @@ internal static class DefragOutput
 
         return true;
     }
+
+    private static readonly Regex FragmentedFiles = new(
+        @"^\s*(?:Total\s+)?fragmented files\s*[:=]?\s*(?<value>[\d,]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex FilePercent = new(
+        @"^\s*(?:Percent\s+)?file fragmentation\s*[:=]?\s*(?<value>[\d,]+)\s*%?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ExcessFragments = new(
+        @"^\s*(?:Total\s+)?excess fragments\s*[:=]?\s*(?<value>[\d,]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Reads the counters defrag prints during /A (and at the end of a pass). Each counter
+    /// arrives on its own line, so they are matched independently. English output only: a
+    /// localized defrag leaves the report empty rather than reporting a wrong figure.
+    /// </summary>
+    public static bool TryReadAnalysis(string line, AnalysisReport report)
+    {
+        if (string.IsNullOrWhiteSpace(line) || report is null) return false;
+
+        if (FragmentedFiles.Match(line) is { Success: true } files &&
+            int.TryParse(files.Groups["value"].Value.Replace(",", string.Empty), out int count))
+        {
+            report.FragmentedFiles = count;
+            return true;
+        }
+
+        if (FilePercent.Match(line) is { Success: true } percent &&
+            int.TryParse(percent.Groups["value"].Value.Replace(",", string.Empty), out int value))
+        {
+            report.FilePercent = value;
+            return true;
+        }
+
+        if (ExcessFragments.Match(line) is { Success: true } excess &&
+            int.TryParse(excess.Groups["value"].Value.Replace(",", string.Empty), out int fragments))
+        {
+            report.ExcessFragments = fragments;
+            return true;
+        }
+
+        return false;
+    }
+}
+
+/// <summary>Analysis counters from the last defrag run, shown beside the cluster map.</summary>
+internal sealed class AnalysisReport
+{
+    public int? FragmentedFiles { get; set; }
+
+    public int? FilePercent { get; set; }
+
+    public int? ExcessFragments { get; set; }
+
+    public bool HasAny => FragmentedFiles.HasValue || FilePercent.HasValue;
+
+    public void Clear()
+    {
+        FragmentedFiles = null;
+        FilePercent = null;
+        ExcessFragments = null;
+    }
+
+    public string Describe()
+    {
+        if (!HasAny) return string.Empty;
+
+        var parts = new List<string>(3);
+
+        if (FragmentedFiles is { } files) parts.Add($"{files:N0} fragmented files");
+        if (FilePercent is { } percent) parts.Add($"{percent}% file fragmentation");
+        if (ExcessFragments is { } excess) parts.Add($"{excess:N0} excess fragments");
+
+        return string.Join("  •  ", parts);
+    }
 }

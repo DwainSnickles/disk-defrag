@@ -5,7 +5,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>DiskDefrag</RootNamespace>
     <AssemblyName>DiskDefrag</AssemblyName>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -439,15 +439,54 @@ internal sealed class VolumeGrid : Control
 }
 
 /// <summary>Cluster map: one sampled cell per slice of the volume allocation bitmap.</summary>
+
 internal sealed class ClusterMapView : Control
 {
+    private const int LegendHeight = 24;
+
+    // WCAG minimums: graphical objects 3:1, body text 4.5:1 against their own surface.
+    private const double SwatchMinimum = 3.0;
+    private const double LabelMinimum = 4.5;
+    private const int AxisHeight = 20;
+    private const int MaxMovers = 24;
+
+    // Flat, high-contrast tones. Blending green through a ramp made neighbouring cells
+    // differ by a few RGB points, which read as one blur rather than as squares.
+    private static readonly Color FreeTone = Color.FromArgb(26, 54, 92);
+    // Five discrete fill steps: enough to read how full a cell is, few enough that
+    // neighbouring cells stay distinct squares instead of merging into a ramp.
+    private static readonly Color[] UsedTones =
+    {
+        Color.FromArgb(21, 90, 61),
+        Color.FromArgb(25, 115, 78),
+        Color.FromArgb(31, 145, 96),
+        Color.FromArgb(39, 184, 114),
+        DefragTheme.Good,
+    };
+    private static readonly Color FragTone = Color.FromArgb(116, 22, 34);
+    private static readonly Color FragSoftTone = Color.FromArgb(150, 44, 58);
+
+    private readonly ToolTip _tips = new();
+    private readonly System.Windows.Forms.Timer _anim = new() { Interval = 40 };
+    private readonly List<Mover> _movers = new();
+
     private ClusterMapData? _data;
     private string _message = "Select a volume to render its cluster map.";
     private double[]? _sample;
-    private double[]? _previousSample;
+    private double[]? _previous;
     private sbyte[]? _delta;
+    private double[]? _scatter;   // 0 = one long run, 1 = alternating used/free, per cell
+    private int _startPercent;
+    private bool _snapshotPending;
+    private float[]? _pulse;
     private int _columns;
     private int _rows;
+    private bool _active;
+    private float _sweep;
+    private int _hoverIndex = -1;
+    private Rectangle _cells;      // the grid itself, snapped to whole pixels
+    private string _analysis = string.Empty;   // defrag counters, drawn above the grid
+    private int _cell = 5;         // integer pitch: fractional pitches render blurred
 
     public ClusterMapView()
     {
@@ -460,6 +499,16 @@ internal sealed class ClusterMapView : Control
             true);
 
         BackColor = Color.Transparent;
+        _anim.Tick += (_, _) => Advance();
+    }
+
+    /// <summary>Analysis counters from defrag (fragmented files, percentage).</summary>
+    public void SetAnalysis(string text)
+    {
+        if (_analysis == text) return;
+
+        _analysis = text;
+        Invalidate();
     }
 
     public string Note => _data?.Note ?? _message;
@@ -468,8 +517,10 @@ internal sealed class ClusterMapView : Control
     {
         _data = null;
         _sample = null;
-        _previousSample = null;
+        _previous = null;
         _delta = null;
+        _pulse = null;
+        _movers.Clear();
         _message = message;
         Invalidate();
     }
@@ -478,21 +529,64 @@ internal sealed class ClusterMapView : Control
     {
         if (_data is null || _data.Letter != data.Letter)
         {
-            _previousSample = null;
+            _startPercent = 0;
+            _scatter = null;
+            _snapshotPending = false;
+            _previous = null;
             _delta = null;
+            _pulse = null;
+            _movers.Clear();
         }
 
         _data = data;
-        _sample = null;
+        
+        _sample = null;   // resample against the grid that is on screen now
+        Invalidate();
+    }
+
+    /// <summary>defrag.exe started: keep frames coming so the sweep and movers advance.</summary>
+    public void BeginActivity()
+    {
+        _active = true;
+        _snapshotPending = true;   // the pre-run fragmentation is captured on the next paint
+        _sweep = 0f;
+        _anim.Start();
+        Invalidate();
+    }
+
+    public void EndActivity()
+    {
+        _active = false;
+        _movers.Clear();
+        _anim.Stop();
         Invalidate();
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        if (Width < 80 || Height < 60) return;
+        if (Width < 160 || Height < 110) return;
 
         Graphics g = e.Graphics;
-        var area = new Rectangle(12, 10, Math.Max(20, Width - 24), Math.Max(20, Height - 44));
+
+        bool hasAnalysis = !string.IsNullOrEmpty(_analysis);
+        int top = hasAnalysis ? 28 : 10;
+
+        var area = new Rectangle(
+            12,
+            top,
+            Math.Max(40, Width - 24),
+            Math.Max(40, Height - top - LegendHeight - AxisHeight - 4));
+
+        _cells = area;
+
+        if (hasAnalysis)
+        {
+            TextRenderer.DrawText(
+                g, _analysis, DefragTheme.Kicker,
+                new Rectangle(12, 9, Math.Max(20, Width - 24), 16),
+                DefragTheme.Text,
+                TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+        }
 
         if (_data is null)
         {
@@ -502,57 +596,59 @@ internal sealed class ClusterMapView : Control
             return;
         }
 
-        int columns = Math.Max(16, area.Width / 6);
-        int rows = Math.Max(8, area.Height / 6);
-        EnsureSample(columns, rows);
+        // Whole-pixel cells with a one-pixel gutter. Fractional pitch and size were what
+        // made the grid read as a blur rather than as squares.
+        int cell = Math.Clamp((int)Math.Round(area.Width / 150.0), 4, 10);
+        int columns = Math.Max(8, area.Width / cell);
+        int rows = Math.Max(6, area.Height / cell);
+
+        if (_sample is null || _columns != columns || _rows != rows) Resample(columns, rows);
         UpdateDelta();
+        
+        if (_snapshotPending && _scatter is not null)
+        {
+            _startPercent = ScatterPercent(_scatter);
+            _snapshotPending = false;
+        }
 
-        float size = Math.Min(area.Width / (float)columns, area.Height / (float)rows);
-        float gap = size > 3.2f ? 1f : 0f;
+        _cell = cell;
+        _cells = new Rectangle(
+            area.X + ((area.Width - (columns * cell)) / 2),
+            area.Y + ((area.Height - (rows * cell)) / 2),
+            columns * cell,
+            rows * cell);
 
-        Color free = Color.FromArgb(22, 30, 40);
-        Color partial = DefragTheme.Alpha(DefragTheme.Good, 110);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.None;
+        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+
+        Color free = FreeTone;
+        int block = cell >= 4 ? cell - 1 : cell;
 
         for (int row = 0; row < rows; row++)
         {
             for (int column = 0; column < columns; column++)
             {
                 int index = (row * columns) + column;
-                double used = _sample![index];
-                Color tone;
-
-                if (_delta is not null && _delta[index] != 0)
-                {
-                    tone = _delta[index] > 0 ? DefragTheme.Accent : DefragTheme.Violet;
-                }
-                else
-                {
-                    tone = used <= 0.001 ? free : used >= 0.99 ? DefragTheme.Good : partial;
-                }
+                Color tone = ToneFor(index, _sample![index], free);
 
                 using var brush = new SolidBrush(tone);
-                g.FillRectangle(
-                    brush,
-                    area.X + (column * size),
-                    area.Y + (row * size),
-                    Math.Max(1f, size - gap),
-                    Math.Max(1f, size - gap));
+                g.FillRectangle(brush, _cells.X + (column * cell), _cells.Y + (row * cell), block, block);
             }
         }
 
+        if (_active) PaintSweep(g, _cells);
+        PaintMovers(g, _cells);
+        PaintHover(g, _cells);
+        PaintAxis(g, _cells);
         PaintLegend(g);
     }
 
-    private void EnsureSample(int columns, int rows)
+    private void Resample(int columns, int rows)
     {
-        if (_sample is not null && _columns == columns && _rows == rows) return;
-
-        _columns = columns;
-        _rows = rows;
-
         var sample = new double[columns * rows];
         ClusterMapData data = _data!;
-        long perCell = Math.Max(8, data.Clusters / sample.Length);
+        long perCell = Math.Max(1, (data.Clusters + sample.Length - 1) / sample.Length);
 
         for (int cell = 0; cell < sample.Length; cell++)
         {
@@ -567,9 +663,33 @@ internal sealed class ClusterMapView : Control
             sample[cell] = (double)CountAllocated(start, end) / (end - start);
         }
 
+        if (_columns != columns || _rows != rows || _previous is null || _previous.Length != sample.Length)
+        {
+            _previous = null;
+            _pulse = new float[sample.Length];
+        }
+
+        _pulse ??= new float[sample.Length];
+        _columns = columns;
+        _rows = rows;
         _sample = sample;
+        
+        // Fragmentation pass: one scatter value per cell, from the real allocation bitmap.
+        var scatter = new double[sample.Length];
+        
+        for (int cell = 0; cell < scatter.Length; cell++)
+        {
+            long first = cell * perCell;
+            if (first >= data.Clusters) continue;
+        
+            long last = Math.Min(data.Clusters, first + perCell);
+            scatter[cell] = ScatterAmount(first, last);
+        }
+        
+        _scatter = scatter;
     }
 
+    /// <summary>Difference from the previous frame: what defrag moved, and where.</summary>
     private void UpdateDelta()
     {
         if (_sample is null)
@@ -578,29 +698,384 @@ internal sealed class ClusterMapView : Control
             return;
         }
 
-        if (_previousSample is null || _previousSample.Length != _sample.Length)
+        if (_previous is null || _previous.Length != _sample.Length)
         {
             _delta = new sbyte[_sample.Length];
-            _previousSample = (double[])_sample.Clone();
+            _previous = (double[])_sample.Clone();
             return;
         }
 
         var delta = new sbyte[_sample.Length];
+        var freed = new List<int>();
+        var gained = new List<int>();
+        _pulse ??= new float[_sample.Length];
 
         for (int index = 0; index < _sample.Length; index++)
         {
-            double difference = _sample[index] - _previousSample[index];
-            delta[index] = difference > 0.04 ? (sbyte)1 : difference < -0.04 ? (sbyte)-1 : (sbyte)0;
+            double difference = _sample[index] - _previous[index];
+
+            if (difference > 0.04)
+            {
+                delta[index] = 1;
+                gained.Add(index);
+                _pulse[index] = 1f;
+            }
+            else if (difference < -0.04)
+            {
+                delta[index] = -1;
+                freed.Add(index);
+                _pulse[index] = 1f;
+            }
         }
 
         _delta = delta;
-        _previousSample = (double[])_sample.Clone();
+        _previous = (double[])_sample.Clone();
+
+        if (_active && freed.Count > 0 && gained.Count > 0) SpawnMovers(freed, gained);
     }
 
-    private long CountAllocated(long startCluster, long endCluster)
+    /// <summary>
+    /// One block in flight per reallocated pair: a freed cell and a newly written cell are the
+    /// same data moving, so the animation pairs them instead of inventing motion.
+    /// </summary>
+    private void SpawnMovers(List<int> freed, List<int> gained)
+    {
+        int pairs = Math.Min(MaxMovers, Math.Min(freed.Count, gained.Count));
+        if (pairs <= 0) return;
+
+        _movers.Clear();
+
+        for (int i = 0; i < pairs; i++)
+        {
+            int from = freed[i * freed.Count / pairs];
+            int to = gained[i * gained.Count / pairs];
+            _movers.Add(new Mover(from, to));
+        }
+
+        if (!_anim.Enabled) _anim.Start();
+    }
+
+    private void Advance()
+    {
+        bool dirty = false;
+
+        if (_pulse is not null)
+        {
+            for (int i = 0; i < _pulse.Length; i++)
+            {
+                if (_pulse[i] <= 0f) continue;
+                _pulse[i] = Math.Max(0f, _pulse[i] - 0.045f);
+                dirty = true;
+            }
+        }
+
+        if (_active)
+        {
+            _sweep += 0.012f;
+            if (_sweep > 1f) _sweep = 0f;
+            dirty = true;
+        }
+
+        for (int i = _movers.Count - 1; i >= 0; i--)
+        {
+            _movers[i].Progress += 0.07f;
+            if (_movers[i].Progress >= 1f) _movers.RemoveAt(i);
+            dirty = true;
+        }
+
+        if (dirty) Invalidate();
+        else if (!_active) _anim.Stop();
+    }
+
+    private Color ToneFor(int index, double used, Color free)
+    {
+        if (_pulse is not null && _pulse[index] > 0.01f)
+        {
+            Color hot = _delta is not null && _delta[index] < 0 ? DefragTheme.Violet : DefragTheme.Accent;
+            return Blend(ToneForUse(used, free), hot, _pulse[index] * 0.85);
+        }
+
+        if (_delta is not null && _delta[index] != 0)
+        {
+            return _delta[index] > 0 ? DefragTheme.Accent : DefragTheme.Violet;
+        }
+
+        Color baseTone = ToneForUse(used, free);
+        
+        // Broken-up extents read red; as defrag consolidates them the tint drains away.
+        if (_scatter is not null && index < _scatter.Length)
+        {
+            double amount = _scatter[index];
+
+            // Two crisp steps instead of a wash: solid dark red where extents are chopped,
+            // a darker half-tone where they are only mildly broken up.
+            if (amount >= 0.5) return FragTone;
+
+            if (amount >= 0.12) return FragSoftTone;
+        }
+        
+        return baseTone;
+    }
+
+    private static Color ToneForUse(double used, Color free)
+    {
+        if (used <= 0.02) return free;
+
+        // Buckets are 20% wide, so a cell lands on one of five fixed greens.
+        int step = Math.Clamp((int)(used * UsedTones.Length), 0, UsedTones.Length - 1);
+
+        return UsedTones[step];
+    }
+
+    private static Color Blend(Color from, Color to, double amount)
+    {
+        amount = Math.Clamp(amount, 0.0, 1.0);
+
+        return Color.FromArgb(
+            (int)Math.Round(from.R + ((to.R - from.R) * amount)),
+            (int)Math.Round(from.G + ((to.G - from.G) * amount)),
+            (int)Math.Round(from.B + ((to.B - from.B) * amount)));
+    }
+
+    private void PaintSweep(Graphics g, Rectangle area)
+    {
+        const int Band = 10;
+        int x = area.X + (int)(area.Width * _sweep);
+
+        using (var band = new SolidBrush(Color.FromArgb(14, DefragTheme.Accent)))
+        {
+            g.FillRectangle(band, x - (Band / 2), area.Y, Band, area.Height);
+        }
+
+        using var pen = new Pen(DefragTheme.Alpha(DefragTheme.Accent, 140));
+        g.DrawLine(pen, x, area.Y, x, area.Bottom);
+    }
+
+    private void PaintMovers(Graphics g, Rectangle grid)
+    {
+        if (_movers.Count == 0) return;
+
+        int width = Math.Max(3, (int)(_cell * 1.6));
+
+        foreach (Mover mover in _movers)
+        {
+            Point from = CellCenter(mover.From, grid);
+            Point to = CellCenter(mover.To, grid);
+
+            int x = (int)Math.Round(from.X + ((to.X - from.X) * mover.Progress));
+            int y = (int)Math.Round(from.Y + ((to.Y - from.Y) * mover.Progress));
+
+            using var brush = new SolidBrush(DefragTheme.Warn);
+            g.FillRectangle(brush, x - (width / 2), y - (width / 2), width, width);
+        }
+    }
+
+    private Point CellCenter(int index, Rectangle grid)
+    {
+        int column = index % Math.Max(1, _columns);
+        int row = index / Math.Max(1, _columns);
+
+        return new Point(grid.X + (column * _cell) + (_cell / 2), grid.Y + (row * _cell) + (_cell / 2));
+    }
+
+    private void PaintHover(Graphics g, Rectangle grid)
+    {
+        if (_hoverIndex < 0 || _columns <= 0 || _hoverIndex >= _columns * _rows) return;
+
+        int column = _hoverIndex % _columns;
+        int row = _hoverIndex / _columns;
+
+        using var pen = new Pen(DefragTheme.Accent);
+        g.DrawRectangle(pen, grid.X + (column * _cell), grid.Y + (row * _cell), Math.Max(1, _cell - 1), Math.Max(1, _cell - 1));
+    }
+
+    private void PaintAxis(Graphics g, Rectangle area)
+    {
+        ClusterMapData data = _data!;
+        int lineY = Height - LegendHeight - AxisHeight + 4;
+
+        using var pen = new Pen(DefragTheme.Border);
+        g.DrawLine(pen, area.X, lineY, area.Right - 1, lineY);
+
+        ulong total = (ulong)Math.Max(0L, data.Clusters) * (ulong)Math.Max(0, data.BytesPerCluster);
+
+        for (int i = 0; i <= 4; i++)
+        {
+            int x = area.X + (int)Math.Round(area.Width * (i / 4.0));
+            g.DrawLine(pen, x, lineY, x, lineY + 4);
+
+            string label = DefragTheme.Bytes(total * (ulong)i / 4);
+            int width = TextRenderer.MeasureText(label, DefragTheme.Kicker).Width;
+            int left = Math.Clamp(x - (width / 2), area.X, Math.Max(area.X, area.Right - width));
+
+            TextRenderer.DrawText(g, label, DefragTheme.Kicker, new Point(left, lineY + 4), DefragTheme.TextFaint, TextFormatFlags.NoPrefix);
+        }
+    }
+
+    private void PaintLegend(Graphics g)
+    {
+        int y = Height - LegendHeight + 4;
+        int x = 12;
+
+        x = DrawKey(g, x, y, DefragTheme.Good, "USED");
+        x = DrawKey(g, x, y, UsedTones[2], "PARTLY USED");
+        x = DrawKey(g, x, y, FreeTone, "FREE");
+        x = DrawKey(g, x, y, DefragTheme.Accent, "NEW DATA");
+        x = DrawKey(g, x, y, DefragTheme.Violet, "FREED");
+        x = DrawKey(g, x, y, DefragTheme.Warn, "MOVING");
+        DrawKey(g, x, y, DefragTheme.Bad, "FRAGMENTED");
+
+        string caption = _data?.Note ?? string.Empty;
+        int now = ScatterPercent(_scatter);
+        
+        if (_active)
+        {
+            caption = "defrag running  \u2022  fragmented " + _startPercent + "% \u2192 " + now + "%";
+        }
+        else if (_startPercent > now && now > 0)
+        {
+            caption = "fragmented " + _startPercent + "% \u2192 " + now + "%  \u2022  " + caption;
+        }
+
+        TextRenderer.DrawText(
+            g,
+            DefragTheme.Truncate(caption, 60),
+            DefragTheme.Kicker,
+            new Rectangle(Math.Max(12, Width - 380), y, 368, 16),
+            DefragTheme.TextDim,
+            TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+    }
+
+    private static int DrawKey(Graphics g, int x, int y, Color tone, string label)
+    {
+        using (var brush = new SolidBrush(tone))
+        {
+            g.FillRectangle(brush, x, y + 3, 10, 10);
+        }
+
+        // A swatch that blends into the card on a bright panel keeps its exact grid tone,
+        // so the legend never misreports a colour; it gains a lifted outline instead.
+        if (ContrastRatio(tone, DefragTheme.Surface) < SwatchMinimum)
+        {
+            using var outline = new Pen(EnsureContrast(tone, DefragTheme.Surface, SwatchMinimum));
+            g.DrawRectangle(outline, x, y + 3, 9, 9);
+        }
+
+        Color labelTone = EnsureContrast(DefragTheme.TextDim, DefragTheme.Surface, LabelMinimum);
+        int width = TextRenderer.MeasureText(label, DefragTheme.Kicker).Width;
+        TextRenderer.DrawText(g, label, DefragTheme.Kicker, new Point(x + 14, y), labelTone, TextFormatFlags.NoPrefix);
+
+        return x + 14 + width + 16;
+    }
+
+    /// <summary>Lifts a tone away from the background until it clears the given contrast minimum.</summary>
+    private static Color EnsureContrast(Color tone, Color background, double minimum)
+    {
+        if (ContrastRatio(tone, background) >= minimum) return tone;
+
+        Color lifted = tone;
+
+        for (int step = 0; step < 10; step++)
+        {
+            lifted = Blend(lifted, Color.White, 0.18);
+
+            if (ContrastRatio(lifted, background) >= minimum) break;
+        }
+
+        return lifted;
+    }
+
+    /// <summary>WCAG 2.1 contrast ratio between two colours, 1.0 to 21.0.</summary>
+    private static double ContrastRatio(Color first, Color second)
+    {
+        double a = RelativeLuminance(first);
+        double b = RelativeLuminance(second);
+
+        if (a < b) (a, b) = (b, a);
+
+        return (a + 0.05) / (b + 0.05);
+    }
+
+    private static double RelativeLuminance(Color color)
+    {
+        return (0.2126 * LinearChannel(color.R)) + (0.7152 * LinearChannel(color.G)) + (0.0722 * LinearChannel(color.B));
+    }
+
+    private static double LinearChannel(int value)
+    {
+        double channel = value / 255.0;
+
+        return channel <= 0.03928 ? channel / 12.92 : Math.Pow((channel + 0.055) / 1.055, 2.4);
+    }
+
+    /// <summary>1 when this span flips between used and free constantly, 0 when it forms long runs.</summary>
+    private double ScatterAmount(long startCluster, long endCluster)
+    {
+        long span = endCluster - startCluster;
+        if (span < 32) return 0;
+
+        byte[] bits = _data!.Bits;
+        long firstByte = Math.Max(0, startCluster / 8);
+        long lastByte = Math.Min(bits.Length - 1, (endCluster - 1) / 8);
+        if (lastByte < firstByte) return 0;
+
+        int flips = 0;
+        int previous = -1;
+
+        for (long index = firstByte; index <= lastByte; index++)
+        {
+            int value = bits[index];
+            flips += FlipsPerByte[value];
+
+            if (previous >= 0 && ((previous >> 7) & 1) != (value & 1)) flips++;
+
+            previous = value;
+        }
+
+        // Counted over the whole cell: on a real volume a cell spans tens of thousands of
+        // clusters, so judging it from a leading window left almost everything green.
+        double ratio = (double)flips / span;
+        return Math.Clamp((ratio - 0.002) / 0.035, 0.0, 1.0);
+    }
+
+    private static int[] BuildFlips()
+    {
+        var table = new int[256];
+
+        for (int value = 0; value < 256; value++)
+        {
+            int flips = 0;
+
+            for (int bit = 0; bit < 7; bit++)
+            {
+                if (((value >> bit) & 1) != ((value >> (bit + 1)) & 1)) flips++;
+            }
+
+            table[value] = flips;
+        }
+
+        return table;
+    }
+
+    private static readonly int[] FlipsPerByte = BuildFlips();
+    
+        /// <summary>Share of the grid still broken into short extents, 0-100.</summary>
+        private int ScatterPercent(double[]? scatter)
+        {
+            if (scatter is null || scatter.Length == 0) return 0;
+    
+            double total = 0;
+            foreach (double value in scatter) total += value;
+    
+            return (int)Math.Round((total / scatter.Length) * 100);
+        }
+    
+        private long CountAllocated(long startCluster, long endCluster)
     {
         byte[] bits = _data!.Bits;
-        long firstByte = startCluster / 8;
+        if (bits.Length == 0) return 0;
+
+        long firstByte = Math.Max(0, startCluster / 8);
         long lastByte = Math.Min(bits.Length - 1, (endCluster - 1) / 8);
         long allocated = 0;
 
@@ -613,36 +1088,78 @@ internal sealed class ClusterMapView : Control
         return allocated;
     }
 
-    private void PaintLegend(Graphics g)
+    protected override void OnMouseMove(MouseEventArgs e)
     {
-        int y = Height - 26;
-        int x = 12;
+        base.OnMouseMove(e);
 
-        x = DrawKey(g, x, y, DefragTheme.Good, "USED");
-        x = DrawKey(g, x, y, DefragTheme.Alpha(DefragTheme.Good, 110), "PARTLY USED");
-        x = DrawKey(g, x, y, Color.FromArgb(22, 30, 40), "FREE");
-        x = DrawKey(g, x, y, DefragTheme.Accent, "NEW DATA");
-        DrawKey(g, x, y, DefragTheme.Violet, "FREED");
+        int index = HitTest(e.Location);
+        if (index == _hoverIndex) return;
 
-        TextRenderer.DrawText(
-            g,
-            DefragTheme.Truncate(_data?.Note ?? string.Empty, 52),
-            DefragTheme.MonoSmall,
-            new Rectangle(Math.Max(12, Width - 340), y, 328, 16),
-            DefragTheme.TextDim,
-            TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-    }
+        _hoverIndex = index;
 
-    private static int DrawKey(Graphics g, int x, int y, Color tone, string label)
-    {
-        using (var brush = new SolidBrush(tone))
+        if (index >= 0 && _data is not null && _sample is not null)
         {
-            g.FillRectangle(brush, x, y + 3, 10, 10);
+            long perCell = Math.Max(1, (_data.Clusters + _sample.Length - 1) / _sample.Length);
+            long first = index * perCell;
+            long last = Math.Max(first, Math.Min(_data.Clusters, first + perCell) - 1);
+
+            _tips.SetToolTip(this, $"clusters {first:N0}\u2013{last:N0}\n{_sample[index] * 100:0}% allocated");
+        }
+        else
+        {
+            _tips.SetToolTip(this, string.Empty);
         }
 
-        int width = TextRenderer.MeasureText(label, DefragTheme.Kicker).Width;
-        TextRenderer.DrawText(g, label, DefragTheme.Kicker, new Point(x + 14, y), DefragTheme.TextDim, TextFormatFlags.NoPrefix);
+        Invalidate();
+    }
 
-        return x + 14 + width + 16;
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+
+        _hoverIndex = -1;
+        _tips.SetToolTip(this, string.Empty);
+        Invalidate();
+    }
+
+    private int HitTest(Point point)
+    {
+        if (_data is null || _sample is null || _columns <= 0 || _rows <= 0) return -1;
+        if (!_cells.Contains(point) || _cells.Width <= 0 || _cells.Height <= 0) return -1;
+
+        if (_cell <= 0) return -1;
+
+        int column = (point.X - _cells.X) / _cell;
+        int row = (point.Y - _cells.Y) / _cell;
+
+        if (column < 0 || column >= _columns || row < 0 || row >= _rows) return -1;
+        return (row * _columns) + column;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _anim.Stop();
+            _anim.Dispose();
+            _tips.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private sealed class Mover
+    {
+        public Mover(int from, int to)
+        {
+            From = from;
+            To = to;
+        }
+
+        public int From { get; }
+
+        public int To { get; }
+
+        public float Progress { get; set; }
     }
 }

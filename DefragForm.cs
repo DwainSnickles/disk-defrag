@@ -17,18 +17,24 @@ internal sealed class DefragForm : Form
     private readonly DarkButton _optimize = new() { Text = "OPTIMIZE", Size = new Size(120, 32) };
     private readonly DarkButton _stop = new() { Text = "STOP", Tone = DefragTheme.Bad, Size = new Size(90, 32) };
     private readonly DarkButton _exit = new() { Text = "EXIT", Size = new Size(90, 32) };
+    private readonly CheckBox _minimizeWhenDone = new() { Text = "MINIMIZE WHEN DONE", AutoSize = true };
+    private readonly CheckBox _shutdownWhenDone = new() { Text = "SHUT DOWN WHEN DONE", AutoSize = true };
 
     private string? _selected;
     private DefragJob? _job;
+    private readonly AnalysisReport _report = new();
     private bool _busy;
     private bool _mapBusy;
+    private bool _cleaned;
+    private bool _embedded;
+    private Panel? _headerPanel;
     private readonly System.Windows.Forms.Timer _liveTimer = new() { Interval = 800 };
 
     public DefragForm()
     {
         Text = "DISK DEFRAG \u2014 PC MEDIC TOOL";
-        ClientSize = new Size(940, 720);
-        MinimumSize = new Size(880, 660);
+        ClientSize = new Size(1240, 880);
+        MinimumSize = new Size(1080, 780);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = DefragTheme.Bg;
         ForeColor = DefragTheme.Text;
@@ -52,6 +58,19 @@ internal sealed class DefragForm : Form
         foreach (DarkButton button in new[] { _analyze, _defragment, _optimize, _stop, _exit }) toolbar.Controls.Add(button);
         toolbar.Controls.Add(_elevate);
 
+        foreach (CheckBox box in new[] { _minimizeWhenDone, _shutdownWhenDone })
+        {
+            box.FlatStyle = FlatStyle.Flat;
+            box.BackColor = DefragTheme.Bg;
+            box.ForeColor = DefragTheme.TextDim;
+            box.Font = DefragTheme.Kicker;
+            box.Cursor = Cursors.Hand;
+            toolbar.Controls.Add(box);
+        }
+
+        _tips.SetToolTip(_minimizeWhenDone, "Minimise the window when a defrag or optimize run finishes.");
+        _tips.SetToolTip(_shutdownWhenDone, "Shuts the PC down 60 seconds after a defrag or optimize run finishes.");
+
         _analyze.Click += async (_, _) => await RunAsync(DefragMode.Analyze);
         _defragment.Click += async (_, _) => await RunAsync(DefragMode.Defragment);
         _optimize.Click += async (_, _) => await RunAsync(DefragMode.Optimize);
@@ -74,6 +93,7 @@ internal sealed class DefragForm : Form
     private Panel BuildHeader()
     {
         var header = new Panel { Dock = DockStyle.Top, Height = 76, BackColor = DefragTheme.Bg };
+        _headerPanel = header;
         header.Paint += (_, e) =>
         {
             using var pen = new Pen(DefragTheme.BorderSoft);
@@ -131,6 +151,14 @@ internal sealed class DefragForm : Form
                 x += button.Width + 8;
             }
 
+            int optionsX = x + 18;
+
+            foreach (CheckBox box in new[] { _minimizeWhenDone, _shutdownWhenDone })
+            {
+                box.Location = new Point(optionsX, 13);
+                optionsX += box.Width + 18;
+            }
+
             _exit.SetBounds(toolbar.ClientSize.Width - _exit.Width - Inset, 4, _exit.Width, 32);
             _elevate.SetBounds(_exit.Left - _elevate.Width - 8, 6, _elevate.Width, 28);
         }
@@ -176,7 +204,7 @@ internal sealed class DefragForm : Form
         var card = new CardPanel("ACTIVITY", "DEFRAG OUTPUT")
         {
             Dock = DockStyle.Bottom,
-            Height = 150,
+            Height = 120,
         };
 
         _log.Multiline = true;
@@ -221,6 +249,8 @@ internal sealed class DefragForm : Form
     private void OnVolumeSelected(string letter)
     {
         _selected = letter;
+        _report.Clear();
+        _map.SetAnalysis(string.Empty);
 
         VolumeInfo? volume = VolumeService.Load().FirstOrDefault(candidate => candidate.Letter == letter);
         SetStatus(
@@ -289,6 +319,10 @@ internal sealed class DefragForm : Form
 
         string letter = _selected;
 
+        // A new run starts a new report; the previous run's figures would be misleading.
+        _report.Clear();
+        _map.SetAnalysis(string.Empty);
+
         // Load the pre-job bitmap so the live map can highlight what changes.
         await LoadMapAsync(letter);
 
@@ -308,6 +342,7 @@ internal sealed class DefragForm : Form
         _progress.Begin($"{DefragJob.VerbFor(mode).ToUpperInvariant()} {letter}:");
         SetBusy(true, $"{DefragJob.VerbFor(mode)} {letter}: \u2014 defrag.exe is running.");
         _liveTimer.Start();
+        _map.BeginActivity();
 
         Append(string.Empty);
         Append($"> defrag {DefragJob.ArgumentsFor(letter, mode)}");
@@ -333,6 +368,11 @@ internal sealed class DefragForm : Form
                     {
                         _progress.Report(label, percent);
                     }
+
+                    if (DefragOutput.TryReadAnalysis(line, _report))
+                    {
+                        _map.SetAnalysis(_report.Describe());
+                    }
                 });
             }
         };
@@ -343,6 +383,7 @@ internal sealed class DefragForm : Form
 
             BeginInvoke(() =>
             {
+                _map.EndActivity();
                 _liveTimer.Stop();
                 _job = null;
                 _busy = false;
@@ -359,6 +400,7 @@ internal sealed class DefragForm : Form
                 else if (code == 0)
                 {
                     SetStatus($"{DefragJob.VerbFor(mode)} {letter}: finished.", DefragTheme.Good);
+                    AfterCompletion(mode);
                 }
                 else
                 {
@@ -426,12 +468,74 @@ internal sealed class DefragForm : Form
         }
     }
 
+    /// <summary>Hosts the tool inside PC Medic: no window chrome, no duplicate header or exit button.</summary>
+    internal void Embed()
+    {
+        _embedded = true;
+        FormBorderStyle = FormBorderStyle.None;
+        TopLevel = false;
+        MinimumSize = Size.Empty;
+        ShowInTaskbar = false;
+
+        if (_headerPanel is not null) _headerPanel.Height = 0;
+
+        _exit.Visible = false;
+        _elevate.Visible = false;
+    }
+
+    /// <summary>True while a defrag, analyse or optimize run is in flight.</summary>
+    internal bool IsWorking => _job is not null;
+
+    /// <summary>Applies the after-run options the operator ticked; a stopped or failed run never triggers them.</summary>
+    private void AfterCompletion(DefragMode mode)
+    {
+        // Analysis changes nothing, so it is not treated as the job being done.
+        if (mode == DefragMode.Analyze) return;
+
+        if (_minimizeWhenDone.Checked)
+        {
+            Form? window = TopLevel ? this : FindForm();
+
+            if (window is not null) window.WindowState = FormWindowState.Minimized;
+        }
+
+        if (!_shutdownWhenDone.Checked) return;
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("shutdown", @"/s /t 60 /c ""PC Medic: defrag finished""") { UseShellExecute = true });
+            Append("PC shutdown scheduled in 60 seconds — run shutdown /a to cancel.");
+        }
+        catch (Exception ex)
+        {
+            Append($"Shutdown could not be scheduled: {ex.Message}");
+        }
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        CleanupJob();
+        base.OnFormClosing(e);
+    }
+
+    // A hosted child is disposed rather than closed, so the job has to be stopped here too.
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) CleanupJob();
+
+        base.Dispose(disposing);
+    }
+
+    /// <summary>Stops defrag.exe exactly once, whether the form is closed or disposed.</summary>
+    private void CleanupJob()
+    {
+        if (_cleaned) return;
+
+        _cleaned = true;
         _liveTimer.Stop();
         _liveTimer.Dispose();
         _job?.Stop();
         _job?.Dispose();
-        base.OnFormClosing(e);
+        _job = null;
     }
 }
