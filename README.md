@@ -1,77 +1,70 @@
-# Disk Defrag — cluster-map defragmentation for Windows
+# Disk Defrag
 
-[![Build status](https://github.com/DwainSnickles/disk-defrag/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/DwainSnickles/disk-defrag/actions/workflows/build.yml) [![Download the portable build](https://img.shields.io/badge/download-portable%20zip-2ea043?logo=windows&logoColor=white)](https://github.com/DwainSnickles/disk-defrag/releases/latest)
+[![Build](https://github.com/DwainSnickles/disk-defrag/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/DwainSnickles/disk-defrag/actions/workflows/build.yml) [![Release](https://img.shields.io/github/v/release/DwainSnickles/disk-defrag?label=download)](https://github.com/DwainSnickles/disk-defrag/releases/latest)
 
-**Disk Defrag** is a free, portable disk defragmentation front-end for Windows 10/11 with a
-live cluster map, streamed `defrag.exe` output and a volume table that shows what the old
-tools hide. It is the standalone companion to **[PC Medic](https://github.com/DwainSnickles/pc-medic)**,
-and it installs nothing: one executable, no service, no background process.
+**Disk Defrag** is a portable Windows disk-optimization front end with a live NTFS cluster map. It calls Windows’ built-in `defrag.exe` for analysis, defragmentation, and media-appropriate optimization, and shows the operation output and progress Windows reports.
 
-It is built for people replacing **AML Free Disk Defrag**, Defraggler,
-Auslogics Disk Defrag or IObit Smart Defrag — same workflow (select volume, Analyse,
-Defragment, Optimise, watch the map), without adverts or a bundled "cleaner".
+- **Analyze** — asks Windows for fragmentation statistics, including fragmented-file count.
+- **Defragment** — runs the Windows defragmentation operation.
+- **Optimize** — runs Windows’ media-aware optimization for the selected volume.
+- **Live cluster map** — reads the NTFS allocation bitmap and refreshes it during an operation.
+- **Progress** — shows Windows’ reported phase and percentage inside a raised, custom progress bar. If Windows provides no percentage, the bar explicitly stays indeterminate rather than inventing one.
+- **Fragment count** — retains a per-volume analysis result, shows a before/after count, and rechecks after an operation. File count and fragmentation percentage are displayed as separate measurements.
+- **Keep awake until done** — optional; asks Windows to keep the system and display awake for the operation.
+- **Shut down after completed** — optional; schedules shutdown 60 seconds after a successful Defragment or Optimize operation. It does not apply to Analyze or failed operations. Cancel with `shutdown /a` from an administrator command prompt.
+- **Administrator required** — the app requests elevation at startup because Windows requires administrator rights for volume-map access and storage operations.
 
-![Disk Defrag: volume table with free space, Analyse/Defragment/Optimize toolbar and the cluster map](docs/disk-defrag.png)
+## Download
 
-## Features
+Download the self-contained Windows x64 zip from [GitHub Releases](https://github.com/DwainSnickles/disk-defrag/releases/latest). Extract and run `DiskDefrag.exe`; no separate .NET runtime installation is required.
 
-- **Volume table** — every fixed and removable volume with file system, label, total/free
-  space and used percentage; click a row to target it.
-- **Analyse / Defragment / Optimize** — drives the Windows storage optimiser directly
-  (`defrag /A`, `/D`, `/O`) and streams its output into the activity log line by line.
-- **Stop** — terminates the running `defrag.exe` process tree.
-- **Operation progress** — a progress strip under the cluster map reports the engine's own
-  percentage (`Analysis: 41% complete`, `Defragmentation: 17% complete`) on a filling bar, and
-  sweeps while `defrag.exe` reports no number, so a run is never a silent black box.
-- **Live cluster map** — read from the NTFS allocation bitmap
-  (`FSCTL_GET_VOLUME_BITMAP`) and the volume geometry (`FSCTL_GET_NTFS_VOLUME_DATA`),
-  sampled into ~16,000 cells with a free / partly-used / fully-used legend. While a
-  job runs the map keeps refreshing and highlights the cells that change: cyan for
-  newly allocated clusters, violet for freed ones.
-- **Honest failure states** — `defrag.exe` reports privilege problems as text while still
-  exiting 0, so the tool reads the output and says "refused — needs an elevated session"
-  instead of claiming success. The cluster map explains itself when the volume cannot be
-  opened rather than drawing a placeholder.
-- **RUN AS ADMIN** — relaunches through UAC when you want the analysis or defragmentation
-  to actually run.
+Each release carries three files:
 
-## Requirements
+- `Disk-Defrag-win-x64.zip` — the portable build.
+- `Disk-Defrag-win-x64.zip.sha256` — checksum for the zip.
+- `DiskDefrag.<version>.nupkg` — the same portable build packaged for NuGet, under `tools/`.
 
-- Windows 10 or 11, NTFS volume for the cluster map
-- .NET 10 desktop runtime, or the .NET 10 SDK to build
-- Administrator rights for the cluster map, Analyse, Defragment and Optimize
+## NuGet package
+
+The package distributes the portable build; it is not a library to reference from another project. It carries whatever is in `staging/diskdefrag`, so publish that first — packing without it fails rather than shipping an empty package:
+
+```powershell
+dotnet publish DiskDefrag.csproj -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=None -p:DebugSymbols=false -o staging/diskdefrag
+dotnet pack DiskDefrag.csproj -c Release -o artifacts
+```
+
+Download `DiskDefrag.<version>.nupkg` from Releases, or install it from a feed you publish it to:
+
+```powershell
+nuget install DiskDefrag -Source <feed>
+```
 
 ## Build
 
-```sh
-dotnet build "DiskDefrag.csproj"
+Requires the .NET 10 SDK and Windows desktop targeting support.
+
+```powershell
+dotnet build DiskDefrag.slnx -c Release
 ```
 
-The project builds into `bin/$(Configuration)/net10.0-windows/` under the repo root.
-Run it on its own by copying `DiskDefrag.exe` plus its `.dll` and `.runtimeconfig.json`
-anywhere you like — or use the self-contained single-file publish from the release
-workflow if you want one exe with no .NET dependency.
+To publish a self-contained x64 build:
 
-## SEO / search terms
+```powershell
+dotnet publish DiskDefrag.csproj -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:DebugType=None -p:DebugSymbols=false -o staging/diskdefrag
+```
 
-`free disk defrag` · `disk defragmentation Windows 11` · `AML Free Disk Defrag alternative` ·
-`Defraggler alternative` · `Auslogics Disk Defrag alternative` ·
-`IObit Smart Defrag alternative` · `Advanced SystemCare alternative` ·
-`cluster map defrag` · `NTFS defragment tool` · `portable defrag` · `defrag with cluster map`
+## Safety and scope
 
-## Repository topics
+Disk Defrag uses Windows’ storage engine rather than implementing raw file moves. Fragment-reduction progress is an estimate based on before/after analysis, not a count of files Windows says it has moved. The tool does not format or partition volumes.
 
-`disk-defrag` `defragmentation` `cluster-map` `ntfs` `windows` `windows-11` `portable`
-`winforms` `dotnet` `storage-optimizer` `aml-disk-defrag-alternative`
-`defraggler-alternative` `advanced-systemcare-alternative` `freebuff`
+## SEO / repository topics
 
-## Part of the PC Medic suite
+`disk-defrag` · `windows-defragmenter` · `disk-optimization` · `cluster-map` · `ntfs` · `windows-11` · `windows-10` · `portable` · `defraggler-alternative` · `aml-disk-defrag-alternative` · `defragmentation` · `csharp` · `winforms` · `dotnet10`
 
-PC Medic is the wider portable maintenance suite (cleanup, startup audit, registry audit,
-shortcut audit, power tuning). Its Maintenance page launches this tool when the executables
-sit side by side: **[github.com/DwainSnickles/pc-medic](https://github.com/DwainSnickles/pc-medic)**.
+## Part of PC Medic
 
----
-
-Built with **[Freebuff](https://freebuff.com)** — the AI coding agent that builds and
-maintains this suite.
+Disk Defrag is the companion project used by [PC Medic](https://github.com/DwainSnickles/pc-medic).

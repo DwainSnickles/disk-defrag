@@ -1,15 +1,56 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <RootNamespace>DiskDefrag</RootNamespace>
-    <AssemblyName>DiskDefrag</AssemblyName>
-    <Version>1.0.1</Version>
-    <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <RootNamespace>DiskDefrag</RootNamespace>
+    <AssemblyName>DiskDefrag</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
+    <AssemblyTitle>Disk Defrag</AssemblyTitle>
+    <Product>Disk Defrag</Product>
+    <Description>Portable Windows disk optimisation front end with a live NTFS cluster map.</Description>
+    <Company>Dwain Snickles</Company>
+    <Copyright>Copyright (c) 2026 Dwain Snickles - GPL-3.0</Copyright>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
+
+    <!-- NuGet carries the portable build as a downloadable package; nothing references this as a library. -->
+    <PackageId>DiskDefrag</PackageId>
+    <PackageTags>disk-defrag;defragmentation;windows;ntfs;winforms;portable</PackageTags>
+    <PackageProjectUrl>https://github.com/DwainSnickles/disk-defrag</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/DwainSnickles/disk-defrag</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Also embedded, so the window icon is this .ico even when another process hosts the tool. -->
+    <EmbeddedResource Include="Assets\app.ico" LogicalName="app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- staging/ is publish output; scratch checkouts live in obj/, and neither is source. -->
+    <Compile Remove="staging\**;obj\repo\**" />
+    <EmbeddedResource Remove="staging\**;obj\repo\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="staging\diskdefrag\**" Pack="true" PackagePath="tools\" Visible="false" />
+  </ItemGroup>
+
+  <!-- Refuse to ship an empty package when the portable build has not been published yet. -->
+  <Target Name="RequirePortableForPack" BeforeTargets="GenerateNuspec;Pack">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\staging\diskdefrag\DiskDefrag.exe')"
+           Text="The NuGet package carries the portable build. Publish it first: dotnet publish DiskDefrag.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o staging/diskdefrag" />
+  </Target>
 </Project>

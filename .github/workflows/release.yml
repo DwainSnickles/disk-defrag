@@ -44,6 +44,10 @@ jobs:
           [IO.File]::WriteAllText("$PWD/artifacts/Disk-Defrag-win-x64.zip.sha256", "$hash  Disk-Defrag-win-x64.zip`n")
           Get-ChildItem artifacts | Select-Object Name, Length
 
+      # The portable build is already in staging/diskdefrag, so the package carries the same binaries.
+      - name: Pack the NuGet package
+        run: dotnet pack "DiskDefrag.csproj" -c Release -o artifacts
+
       - name: Publish the GitHub release
         shell: pwsh
         env:
