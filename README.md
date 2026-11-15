@@ -4,6 +4,8 @@
 
 **Disk Defrag** is a portable Windows disk-optimization front end with a live NTFS cluster map. It calls Windows’ built-in `defrag.exe` for analysis, defragmentation, and media-appropriate optimization, and shows the operation output and progress Windows reports.
 
+![Disk Defrag showing the live NTFS cluster map, volume analysis, and defragmentation status](docs/disk-defrag.png)
+
 - **Analyze** — asks Windows for fragmentation statistics, including fragmented-file count.
 - **Defragment** — runs the Windows defragmentation operation.
 - **Optimize** — runs Windows’ media-aware optimization for the selected volume.
