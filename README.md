@@ -70,3 +70,9 @@ Disk Defrag uses Windows’ storage engine rather than implementing raw file mov
 ## Part of PC Medic
 
 Disk Defrag is the companion project used by [PC Medic](https://github.com/DwainSnickles/pc-medic).
+
+## Support this project
+
+If this project saved you some time, you can leave a tip at
+[ko-fi.com/dwainhsnickles](https://ko-fi.com/dwainhsnickles) (cards, no account needed) or
+[paypal.me/YTDPlatinum](https://paypal.me/YTDPlatinum). Bug reports and pull requests are welcome too.
